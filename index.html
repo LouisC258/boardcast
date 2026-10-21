@@ -2,7 +2,7 @@
 <html lang="zh-HK">
 <head>
   <meta charset="UTF-8">
-  <title>極簡畫面廣播 v4</title>
+  <title>極簡畫面廣播 v5</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; background: #111827; color: #fff; text-align: center; padding: 20px; }
@@ -14,12 +14,12 @@
     .btn-join { background: #3b82f6; color: #fff; }
     video { width: 92%; max-width: 1200px; min-height: 360px; background: #000; border-radius: 8px; border: 1px solid #374151; }
     #status { color: #fbbf24; font-size: 16px; margin-bottom: 8px; font-weight: bold; }
-    #iceStatus { color: #9ca3af; font-size: 13px; margin-bottom: 16px; font-family: monospace; }
+    #iceStatus { color: #34d399; font-size: 14px; margin-bottom: 16px; font-family: monospace; }
   </style>
 </head>
 <body>
 
-  <h2>⚡ 即時畫面廣播 v4 (直連秒通版)</h2>
+  <h2>⚡ 即時畫面廣播 v5 (443 穿牆終極版)</h2>
   <div id="status">請輸入房間暗號（例如：bmsb）然後撳掣</div>
   <div id="iceStatus">系統待命中...</div>
 
@@ -38,14 +38,42 @@
     let localStream = null;
     let peer = null;
 
-    // 產生一條「持續有像素跳動」嘅 2x2 微型視訊流，確保 Chrome WebRTC 視訊管道 100% 喚醒
+    // 關鍵：同時支援 STUN + Port 80/443 TCP/TLS 穿牆 TURN Server
+    const peerConfig = {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turns:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ]
+      }
+    };
+
     function createActiveDummyStream() {
       const canvas = document.createElement('canvas');
       canvas.width = 2;
       canvas.height = 2;
       const ctx = canvas.getContext('2d');
       setInterval(() => {
-        ctx.fillStyle = `rgb(${Math.random()*255}, 0, 0)`;
+        ctx.fillStyle = `rgb(${Math.floor(Math.random()*255)}, 0, 0)`;
         ctx.fillRect(0, 0, 2, 2);
       }, 500);
       return canvas.captureStream(10);
@@ -64,16 +92,15 @@
         videoEl.play().catch(() => {});
 
         if (peer) peer.destroy();
-        peer = new Peer('hk-v4-' + room);
+        peer = new Peer('hk-v5-' + room, peerConfig);
 
         peer.on('open', (id) => {
           statusEl.innerText = `✅ 廣播就緒！叫同事輸入「${room}」再撳「2. 我要睇人畫面」`;
-          iceEl.innerText = `Host ID: ${id} (等待觀眾直接撥入...)`;
+          iceEl.innerText = `Host ID: ${id} (等待觀眾撥入...)`;
         });
 
-        // 觀眾一打過嚟（用 v1 證實行得通嘅 peer.call），即刻將你個真畫面塞俾佢！
         peer.on('call', (call) => {
-          statusEl.innerText = `🟢 同事已連入！正在同步畫面...`;
+          statusEl.innerText = `🟢 同事已連入！正在透過穿牆通道同步畫面...`;
           call.answer(localStream);
           monitorIce(call.peerConnection);
         });
@@ -92,28 +119,26 @@
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
-      statusEl.innerText = '⏳ 正在直連 Host...';
+      statusEl.innerText = '⏳ 正在透過穿牆通道連接 Host...';
       if (peer) peer.destroy();
-      peer = new Peer();
+      peer = new Peer(peerConfig);
 
       peer.on('open', () => {
-        // 用「動態像素流」直接打俾 Host，同時間交換真畫面返嚟
         const dummyStream = createActiveDummyStream();
-        const call = peer.call('hk-v4-' + room, dummyStream);
+        const call = peer.call('hk-v5-' + room, dummyStream);
 
         if (!call) {
-          statusEl.innerText = '❌ 無法建立通話，請確認 Host 已就緒';
+          statusEl.innerText = '❌ 無法建立通話';
           return;
         }
 
         monitorIce(call.peerConnection);
 
         call.on('stream', (remoteStream) => {
-          // 確保只將 Host 傳過嚟嘅「真畫面」擺落 Video 框
           if (videoEl.srcObject !== remoteStream) {
             videoEl.srcObject = remoteStream;
             videoEl.play().catch(e => console.log('Autoplay:', e));
-            statusEl.innerText = '🎉 成功連上同事畫面！（如畫面停頓請 Click 一下播放框）';
+            statusEl.innerText = '🎉 成功收到畫面！（如無反應請點一下播放框）';
           }
         });
       });
@@ -126,7 +151,11 @@
     function monitorIce(pc) {
       if (!pc) return;
       pc.oniceconnectionstatechange = () => {
-        iceEl.innerText = `網絡通道狀態 (ICE): ${pc.iceConnectionState}`;
+        const state = pc.iceConnectionState;
+        iceEl.innerText = `網絡通道狀態 (ICE): ${state}`;
+        if (state === 'connected' || state === 'completed') {
+          iceEl.innerText = `🚀 網絡通道狀態 (ICE): ${state} (穿牆成功！)`;
+        }
       };
     }
   </script>
