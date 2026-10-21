@@ -2,7 +2,7 @@
 <html lang="zh-HK">
 <head>
   <meta charset="UTF-8">
-  <title>極簡畫面廣播 v3</title>
+  <title>極簡畫面廣播 v4</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; background: #111827; color: #fff; text-align: center; padding: 20px; }
@@ -12,19 +12,19 @@
     button { cursor: pointer; font-weight: bold; }
     .btn-host { background: #10b981; color: #fff; }
     .btn-join { background: #3b82f6; color: #fff; }
-    video { width: 92%; max-width: 1200px; min-height: 360px; background: #1f2937; border-radius: 8px; border: 1px solid #374151; }
+    video { width: 92%; max-width: 1200px; min-height: 360px; background: #000; border-radius: 8px; border: 1px solid #374151; }
     #status { color: #fbbf24; font-size: 16px; margin-bottom: 8px; font-weight: bold; }
     #iceStatus { color: #9ca3af; font-size: 13px; margin-bottom: 16px; font-family: monospace; }
   </style>
 </head>
 <body>
 
-  <h2>⚡ 即時畫面廣播 v3 (穩定診斷版)</h2>
-  <div id="status">請輸入房間暗號（例如：room1）然後撳掣</div>
+  <h2>⚡ 即時畫面廣播 v4 (直連秒通版)</h2>
+  <div id="status">請輸入房間暗號（例如：bmsb）然後撳掣</div>
   <div id="iceStatus">系統待命中...</div>
 
   <div class="controls">
-    <input type="text" id="roomId" placeholder="輸入暗號 (如: room1)" value="bmsb" />
+    <input type="text" id="roomId" placeholder="輸入暗號 (如: bmsb)" value="bmsb" />
     <button class="btn-host" onclick="startBroadcast()">1. 我要 Share 畫面 (Host)</button>
     <button class="btn-join" onclick="watchBroadcast()">2. 我要睇人畫面 (Viewer)</button>
   </div>
@@ -38,70 +38,52 @@
     let localStream = null;
     let peer = null;
 
-    const peerConfig = {
-      debug: 2,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
-        ]
-      }
-    };
+    // 產生一條「持續有像素跳動」嘅 2x2 微型視訊流，確保 Chrome WebRTC 視訊管道 100% 喚醒
+    function createActiveDummyStream() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 2;
+      canvas.height = 2;
+      const ctx = canvas.getContext('2d');
+      setInterval(() => {
+        ctx.fillStyle = `rgb(${Math.random()*255}, 0, 0)`;
+        ctx.fillRect(0, 0, 2, 2);
+      }, 500);
+      return canvas.captureStream(10);
+    }
 
     // 【廣播端 Host】
     async function startBroadcast() {
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
-      statusEl.innerText = '⏳ 步驟 1/2：正在呼叫瀏覽器擷取畫面（請喺彈出視窗揀畫面）...';
+      statusEl.innerText = '⏳ 正在呼叫瀏覽器擷取畫面...';
 
       try {
-        // 1. 叫瀏覽器捉畫面
         localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         videoEl.srcObject = localStream;
         videoEl.play().catch(() => {});
 
-        statusEl.innerText = '⏳ 步驟 2/2：畫面已擷取！正在連接配對伺服器註冊房間...';
-
         if (peer) peer.destroy();
-        peer = new Peer('hk-cast-' + room, peerConfig);
+        peer = new Peer('hk-v4-' + room);
 
         peer.on('open', (id) => {
           statusEl.innerText = `✅ 廣播就緒！叫同事輸入「${room}」再撳「2. 我要睇人畫面」`;
-          iceEl.innerText = `Host ID: ${id} (等待觀眾連線...)`;
+          iceEl.innerText = `Host ID: ${id} (等待觀眾直接撥入...)`;
         });
 
-        // 2. 收到觀眾敲門，主動射畫面過去
-        peer.on('connection', (conn) => {
-          iceEl.innerText = `收到觀眾敲門 (${conn.peer.slice(0,6)})，準備發送畫面...`;
-          
-          conn.on('open', () => {
-            statusEl.innerText = `🟢 正在傳送畫面給同事！`;
-            const call = peer.call(conn.peer, localStream);
-            monitorIce(call.peerConnection);
-          });
+        // 觀眾一打過嚟（用 v1 證實行得通嘅 peer.call），即刻將你個真畫面塞俾佢！
+        peer.on('call', (call) => {
+          statusEl.innerText = `🟢 同事已連入！正在同步畫面...`;
+          call.answer(localStream);
+          monitorIce(call.peerConnection);
         });
 
         peer.on('error', (err) => {
-          if (err.type === 'unavailable-id') {
-            statusEl.innerText = `⚠️ 暗號「${room}」啱啱仲未釋放！請改用另一個暗號（例如 ${room}2）再撳一次 Host！`;
-          } else {
-            statusEl.innerText = '❌ 配對伺服器錯誤：' + err.type;
-          }
+          statusEl.innerText = '❌ 錯誤 (' + err.type + ')：請改用第二個暗號再試';
         });
 
       } catch (err) {
-        statusEl.innerText = '❌ 擷取畫面失敗或被取消：' + err.message;
+        statusEl.innerText = '❌ 擷取畫面被取消：' + err.message;
       }
     }
 
@@ -110,41 +92,41 @@
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
-      statusEl.innerText = '⏳ 正在連接配對伺服器...';
+      statusEl.innerText = '⏳ 正在直連 Host...';
       if (peer) peer.destroy();
-      peer = new Peer(peerConfig);
+      peer = new Peer();
 
       peer.on('open', () => {
-        statusEl.innerText = `⏳ 正在尋找房間「${room}」嘅 Host...`;
-        const conn = peer.connect('hk-cast-' + room, { reliable: true });
+        // 用「動態像素流」直接打俾 Host，同時間交換真畫面返嚟
+        const dummyStream = createActiveDummyStream();
+        const call = peer.call('hk-v4-' + room, dummyStream);
 
-        conn.on('open', () => {
-          statusEl.innerText = '🤝 已連上 Host！等待對方傳送畫面串流...';
-        });
+        if (!call) {
+          statusEl.innerText = '❌ 無法建立通話，請確認 Host 已就緒';
+          return;
+        }
 
-        peer.on('call', (call) => {
-          statusEl.innerText = '📥 收到畫面請求，正在解碼播放...';
-          call.answer();
-          monitorIce(call.peerConnection);
+        monitorIce(call.peerConnection);
 
-          call.on('stream', (remoteStream) => {
+        call.on('stream', (remoteStream) => {
+          // 確保只將 Host 傳過嚟嘅「真畫面」擺落 Video 框
+          if (videoEl.srcObject !== remoteStream) {
             videoEl.srcObject = remoteStream;
             videoEl.play().catch(e => console.log('Autoplay:', e));
-            statusEl.innerText = '🎉 成功顯示同事畫面！';
-          });
+            statusEl.innerText = '🎉 成功連上同事畫面！（如畫面停頓請 Click 一下播放框）';
+          }
         });
       });
 
       peer.on('error', (err) => {
-        statusEl.innerText = `❌ 搵唔到房間「${room}」(${err.type})，請確保 Host 已經見到「✅ 廣播就緒」！`;
+        statusEl.innerText = `❌ 連線錯誤 (${err.type})：請確認 Host 已開房！`;
       });
     }
 
     function monitorIce(pc) {
       if (!pc) return;
       pc.oniceconnectionstatechange = () => {
-        const state = pc.iceConnectionState;
-        iceEl.innerText = `網絡通道狀態 (ICE): ${state}`;
+        iceEl.innerText = `網絡通道狀態 (ICE): ${pc.iceConnectionState}`;
       };
     }
   </script>
