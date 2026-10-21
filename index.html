@@ -2,30 +2,29 @@
 <html lang="zh-HK">
 <head>
   <meta charset="UTF-8">
-  <title>極簡畫面廣播 Pro</title>
+  <title>極簡畫面廣播 v3</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; background: #111827; color: #fff; text-align: center; padding: 20px; }
     .controls { margin-bottom: 16px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
     input, button { padding: 10px 16px; font-size: 15px; border-radius: 6px; border: none; }
     input { background: #1f2937; color: #fff; border: 1px solid #374151; }
-    button { cursor: pointer; font-weight: bold; transition: opacity 0.2s; }
-    button:hover { opacity: 0.9; }
+    button { cursor: pointer; font-weight: bold; }
     .btn-host { background: #10b981; color: #fff; }
     .btn-join { background: #3b82f6; color: #fff; }
-    video { width: 92%; max-width: 1200px; min-height: 360px; background: #1f2937; border-radius: 8px; border: 1px solid #374151; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-    #status { color: #fbbf24; font-size: 15px; margin-bottom: 8px; font-weight: 500; }
+    video { width: 92%; max-width: 1200px; min-height: 360px; background: #1f2937; border-radius: 8px; border: 1px solid #374151; }
+    #status { color: #fbbf24; font-size: 16px; margin-bottom: 8px; font-weight: bold; }
     #iceStatus { color: #9ca3af; font-size: 13px; margin-bottom: 16px; font-family: monospace; }
   </style>
 </head>
 <body>
 
-  <h2>⚡ 即時畫面廣播 (零 Server 穿牆版)</h2>
-  <div id="status">請輸入自訂房間名稱（例如：bmsb）</div>
-  <div id="iceStatus">網絡通道狀態：未連線</div>
+  <h2>⚡ 即時畫面廣播 v3 (穩定診斷版)</h2>
+  <div id="status">請輸入房間暗號（例如：room1）然後撳掣</div>
+  <div id="iceStatus">系統待命中...</div>
 
   <div class="controls">
-    <input type="text" id="roomId" placeholder="輸入房間暗號 (如: bmsb)" />
+    <input type="text" id="roomId" placeholder="輸入暗號 (如: room1)" value="bmsb" />
     <button class="btn-host" onclick="startBroadcast()">1. 我要 Share 畫面 (Host)</button>
     <button class="btn-join" onclick="watchBroadcast()">2. 我要睇人畫面 (Viewer)</button>
   </div>
@@ -39,19 +38,14 @@
     let localStream = null;
     let peer = null;
 
-    // 加入 Google STUN 同免費 TURN Server 協助穿透公司防火牆
     const peerConfig = {
+      debug: 2,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           {
             urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443',
             username: 'openrelayproject',
             credential: 'openrelayproject'
           },
@@ -64,85 +58,93 @@
       }
     };
 
-    // 【廣播端 Host】開房 + 等觀眾敲門 + 主動射畫面過去
+    // 【廣播端 Host】
     async function startBroadcast() {
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
+      statusEl.innerText = '⏳ 步驟 1/2：正在呼叫瀏覽器擷取畫面（請喺彈出視窗揀畫面）...';
+
       try {
-        // 1. 捉畫面（只要求 Video，避免無揀 Audio 時 Track 唔對稱）
+        // 1. 叫瀏覽器捉畫面
         localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         videoEl.srcObject = localStream;
+        videoEl.play().catch(() => {});
+
+        statusEl.innerText = '⏳ 步驟 2/2：畫面已擷取！正在連接配對伺服器註冊房間...';
 
         if (peer) peer.destroy();
-        peer = new Peer('hk-screen-' + room, peerConfig);
+        peer = new Peer('hk-cast-' + room, peerConfig);
 
-        peer.on('open', () => {
-          statusEl.innerText = `✅ 廣播中！叫同事打「${room}」再撳「2. 我要睇人畫面」`;
+        peer.on('open', (id) => {
+          statusEl.innerText = `✅ 廣播就緒！叫同事輸入「${room}」再撳「2. 我要睇人畫面」`;
+          iceEl.innerText = `Host ID: ${id} (等待觀眾連線...)`;
         });
 
-        // 2. 當觀眾透過 DataChannel 敲門，Host 主動 Call 觀眾並傳送畫面（解決空白 Canvas 黑畫面問題！）
+        // 2. 收到觀眾敲門，主動射畫面過去
         peer.on('connection', (conn) => {
+          iceEl.innerText = `收到觀眾敲門 (${conn.peer.slice(0,6)})，準備發送畫面...`;
+          
           conn.on('open', () => {
-            statusEl.innerText = `🟢 收到觀眾請求，正在傳送畫面給 (${conn.peer.slice(0,6)})...`;
+            statusEl.innerText = `🟢 正在傳送畫面給同事！`;
             const call = peer.call(conn.peer, localStream);
             monitorIce(call.peerConnection);
           });
         });
 
         peer.on('error', (err) => {
-          statusEl.innerText = '❌ 錯誤：' + err.type;
+          if (err.type === 'unavailable-id') {
+            statusEl.innerText = `⚠️ 暗號「${room}」啱啱仲未釋放！請改用另一個暗號（例如 ${room}2）再撳一次 Host！`;
+          } else {
+            statusEl.innerText = '❌ 配對伺服器錯誤：' + err.type;
+          }
         });
 
       } catch (err) {
-        alert('開唔到畫面：' + err.message);
+        statusEl.innerText = '❌ 擷取畫面失敗或被取消：' + err.message;
       }
     }
 
-    // 【觀眾端 Viewer】入房 + 敲門叫 Host 射畫面過嚟
+    // 【觀眾端 Viewer】
     function watchBroadcast() {
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
-      statusEl.innerText = '⏳ 正在尋找 Host 並建立通道...';
+      statusEl.innerText = '⏳ 正在連接配對伺服器...';
       if (peer) peer.destroy();
       peer = new Peer(peerConfig);
 
       peer.on('open', () => {
-        // 1. 用 DataChannel 向 Host 敲門報到
-        const conn = peer.connect('hk-screen-' + room);
+        statusEl.innerText = `⏳ 正在尋找房間「${room}」嘅 Host...`;
+        const conn = peer.connect('hk-cast-' + room, { reliable: true });
 
         conn.on('open', () => {
-          statusEl.innerText = '🤝 已找到 Host，等待畫面串流傳入...';
+          statusEl.innerText = '🤝 已連上 Host！等待對方傳送畫面串流...';
         });
 
-        // 2. 接收 Host 主動射過嚟嘅畫面
         peer.on('call', (call) => {
-          call.answer(); // 觀眾唔使傳任何 Stream 返去，純接收！
+          statusEl.innerText = '📥 收到畫面請求，正在解碼播放...';
+          call.answer();
           monitorIce(call.peerConnection);
 
           call.on('stream', (remoteStream) => {
             videoEl.srcObject = remoteStream;
-            videoEl.play().catch(e => console.log('Autoplay blocked:', e));
-            statusEl.innerText = '🎉 成功收到畫面！（如無反應請 Click 一下個播放框）';
+            videoEl.play().catch(e => console.log('Autoplay:', e));
+            statusEl.innerText = '🎉 成功顯示同事畫面！';
           });
         });
       });
 
       peer.on('error', (err) => {
-        statusEl.innerText = '❌ 連線失敗 (' + err.type + ')：請確認 Host 已經開咗房！';
+        statusEl.innerText = `❌ 搵唔到房間「${room}」(${err.type})，請確保 Host 已經見到「✅ 廣播就緒」！`;
       });
     }
 
-    // 監測底層 P2P / 防火牆連線狀態
     function monitorIce(pc) {
       if (!pc) return;
       pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
         iceEl.innerText = `網絡通道狀態 (ICE): ${state}`;
-        if (state === 'failed' || state === 'disconnected') {
-          statusEl.innerText = '⚠️ 畫面被網絡防火牆阻擋 (ICE Failed)，需要使用專屬 TURN Server！';
-        }
       };
     }
   </script>
