@@ -101,4 +101,50 @@
 
     // 【觀眾端 Viewer】入房 + 敲門叫 Host 射畫面過嚟
     function watchBroadcast() {
-      const room = document.getElementById('roomId').value
+      const room = document.getElementById('roomId').value.trim();
+      if (!room) return alert('請先輸入房間暗號！');
+
+      statusEl.innerText = '⏳ 正在尋找 Host 並建立通道...';
+      if (peer) peer.destroy();
+      peer = new Peer(peerConfig);
+
+      peer.on('open', () => {
+        // 1. 用 DataChannel 向 Host 敲門報到
+        const conn = peer.connect('hk-screen-' + room);
+
+        conn.on('open', () => {
+          statusEl.innerText = '🤝 已找到 Host，等待畫面串流傳入...';
+        });
+
+        // 2. 接收 Host 主動射過嚟嘅畫面
+        peer.on('call', (call) => {
+          call.answer(); // 觀眾唔使傳任何 Stream 返去，純接收！
+          monitorIce(call.peerConnection);
+
+          call.on('stream', (remoteStream) => {
+            videoEl.srcObject = remoteStream;
+            videoEl.play().catch(e => console.log('Autoplay blocked:', e));
+            statusEl.innerText = '🎉 成功收到畫面！（如無反應請 Click 一下個播放框）';
+          });
+        });
+      });
+
+      peer.on('error', (err) => {
+        statusEl.innerText = '❌ 連線失敗 (' + err.type + ')：請確認 Host 已經開咗房！';
+      });
+    }
+
+    // 監測底層 P2P / 防火牆連線狀態
+    function monitorIce(pc) {
+      if (!pc) return;
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        iceEl.innerText = `網絡通道狀態 (ICE): ${state}`;
+        if (state === 'failed' || state === 'disconnected') {
+          statusEl.innerText = '⚠️ 畫面被網絡防火牆阻擋 (ICE Failed)，需要使用專屬 TURN Server！';
+        }
+      };
+    }
+  </script>
+</body>
+</html>
