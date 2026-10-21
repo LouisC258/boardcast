@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <title>極簡畫面廣播</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #111827; color: #fff; text-align: center; padding: 20px; }
+    .controls { margin-bottom: 20px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+    input, button { padding: 10px 16px; font-size: 15px; border-radius: 6px; border: none; }
+    input { background: #1f2937; color: #fff; border: 1px solid #374151; }
+    button { cursor: pointer; font-weight: bold; }
+    .btn-host { background: #10b981; color: #fff; }
+    .btn-join { background: #3b82f6; color: #fff; }
+    video { width: 92%; max-width: 1200px; background: #000; border-radius: 8px; border: 1px solid #374151; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    #status { color: #9ca3af; font-size: 14px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+
+  <h2>⚡ 即時畫面廣播 (零 Server 版)</h2>
+  <div id="status">請輸入自訂房間名稱（例如：room888）</div>
+
+  <div class="controls">
+    <input type="text" id="roomId" placeholder="輸入房間暗號 (如: room888)" />
+    <button class="btn-host" onclick="startBroadcast()">1. 我要 Share 畫面 (Host)</button>
+    <button class="btn-join" onclick="watchBroadcast()">2. 我要睇人畫面 (Viewer)</button>
+  </div>
+
+  <video id="screenVideo" autoplay playsinline controls muted></video>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const videoEl = document.getElementById('screenVideo');
+    let localStream = null;
+    let peer = null;
+
+    // 【廣播端 Host】開房 + 捉畫面 + 派街坊
+    async function startBroadcast() {
+      const room = document.getElementById('roomId').value.trim();
+      if (!room) return alert('請先輸入房間暗號！');
+
+      try {
+        // 1. 叫瀏覽器捉畫面
+        localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        videoEl.srcObject = localStream;
+
+        // 2. 用房間暗號註冊做 Host
+        peer = new Peer('hk-screen-' + room);
+
+        peer.on('open', () => {
+          statusEl.innerText = `✅ 廣播中！叫同事入呢個網，打「${room}」再撳「我要睇人畫面」`;
+        });
+
+        // 3. 每當有同事連入嚟，就自動將畫面 Stream 射俾佢（支援多個人同時睇）
+        peer.on('call', (call) => {
+          call.answer(localStream);
+          statusEl.innerText = `🟢 廣播中（已有同事連線觀看）`;
+        });
+
+      } catch (err) {
+        alert('開唔到畫面：請確保網址係 https:// 或者 localhost！\n錯誤：' + err.message);
+      }
+    }
+
+    // 【觀眾端 Viewer】入房 + 接收畫面
+    function watchBroadcast() {
+      const room = document.getElementById('roomId').value.trim();
+      if (!room) return alert('請先輸入同事畀你嘅房間暗號！');
+
+      statusEl.innerText = '⏳ 正在連線去同事部機...';
+      peer = new Peer(); // 觀眾隨機拎個 ID 就得
+
+      peer.on('open', () => {
+        // 建立一條空白視訊軌用嚟向 Host 發起請求（PeerJS 規格要求）
+        const canvas = document.createElement('canvas');
+        const emptyStream = canvas.captureStream();
+        
+        const call = peer.call('hk-screen-' + room, emptyStream);
+        
+        call.on('stream', (remoteStream) => {
+          videoEl.srcObject = remoteStream;
+          statusEl.innerText = '🎉 成功連上同事畫面！';
+        });
+      });
+    }
+  </script>
+</body>
+</html>
