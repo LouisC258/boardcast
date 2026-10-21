@@ -2,7 +2,7 @@
 <html lang="zh-HK">
 <head>
   <meta charset="UTF-8">
-  <title>極簡畫面廣播 v5</title>
+  <title>極簡畫面廣播 (真 IP 直連版)</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; background: #111827; color: #fff; text-align: center; padding: 20px; }
@@ -14,12 +14,12 @@
     .btn-join { background: #3b82f6; color: #fff; }
     video { width: 92%; max-width: 1200px; min-height: 360px; background: #000; border-radius: 8px; border: 1px solid #374151; }
     #status { color: #fbbf24; font-size: 16px; margin-bottom: 8px; font-weight: bold; }
-    #iceStatus { color: #34d399; font-size: 14px; margin-bottom: 16px; font-family: monospace; }
+    #iceStatus { color: #34d399; font-size: 13px; margin-bottom: 16px; font-family: monospace; }
   </style>
 </head>
 <body>
 
-  <h2>⚡ 即時畫面廣播 v5 (443 穿牆終極版)</h2>
+  <h2>⚡ 即時畫面廣播 (解鎖真 IP 直連版)</h2>
   <div id="status">請輸入房間暗號（例如：bmsb）然後撳掣</div>
   <div id="iceStatus">系統待命中...</div>
 
@@ -38,34 +38,25 @@
     let localStream = null;
     let peer = null;
 
-    // 關鍵：同時支援 STUN + Port 80/443 TCP/TLS 穿牆 TURN Server
+    // 只用最快嘅 Google STUN (0.018s 反應)，移除失效嘅 openrelay
     const peerConfig = {
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turns:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
+          { urls: 'stun:stun1.l.google.com:19302' }
         ]
       }
     };
+
+    // 關鍵秘技：好似 Trickle ICE 剔選格仔咁，短暫請求權限以解鎖真實 144.214.x.x IP（消除 .local 亂碼）
+    async function unlockRealIP() {
+      try {
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        tempStream.getTracks().forEach(t => t.stop()); // 攞完權限即刻熄咪，唔會錄音
+      } catch (e) {
+        console.log('未能解鎖 mDNS，將嘗試使用 STUN srflx:', e);
+      }
+    }
 
     function createActiveDummyStream() {
       const canvas = document.createElement('canvas');
@@ -84,7 +75,8 @@
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
-      statusEl.innerText = '⏳ 正在呼叫瀏覽器擷取畫面...';
+      statusEl.innerText = '⏳ 正在解鎖網絡通道並擷取畫面...';
+      await unlockRealIP();
 
       try {
         localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
@@ -92,15 +84,15 @@
         videoEl.play().catch(() => {});
 
         if (peer) peer.destroy();
-        peer = new Peer('hk-v5-' + room, peerConfig);
+        peer = new Peer('hk-ip-' + room, peerConfig);
 
         peer.on('open', (id) => {
           statusEl.innerText = `✅ 廣播就緒！叫同事輸入「${room}」再撳「2. 我要睇人畫面」`;
-          iceEl.innerText = `Host ID: ${id} (等待觀眾撥入...)`;
+          iceEl.innerText = `Host ID: ${id} (真 IP 已解鎖，等待連線...)`;
         });
 
         peer.on('call', (call) => {
-          statusEl.innerText = `🟢 同事已連入！正在透過穿牆通道同步畫面...`;
+          statusEl.innerText = `🟢 同事已連入！正在直連傳送畫面...`;
           call.answer(localStream);
           monitorIce(call.peerConnection);
         });
@@ -115,17 +107,19 @@
     }
 
     // 【觀眾端 Viewer】
-    function watchBroadcast() {
+    async function watchBroadcast() {
       const room = document.getElementById('roomId').value.trim();
       if (!room) return alert('請先輸入房間暗號！');
 
-      statusEl.innerText = '⏳ 正在透過穿牆通道連接 Host...';
+      statusEl.innerText = '⏳ 正在解鎖真實 IP 並連接 Host（如彈出權限請按允許）...';
+      await unlockRealIP();
+
       if (peer) peer.destroy();
       peer = new Peer(peerConfig);
 
       peer.on('open', () => {
         const dummyStream = createActiveDummyStream();
-        const call = peer.call('hk-v5-' + room, dummyStream);
+        const call = peer.call('hk-ip-' + room, dummyStream);
 
         if (!call) {
           statusEl.innerText = '❌ 無法建立通話';
@@ -154,7 +148,7 @@
         const state = pc.iceConnectionState;
         iceEl.innerText = `網絡通道狀態 (ICE): ${state}`;
         if (state === 'connected' || state === 'completed') {
-          iceEl.innerText = `🚀 網絡通道狀態 (ICE): ${state} (穿牆成功！)`;
+          iceEl.innerText = `🚀 網絡通道狀態 (ICE): ${state} (直連成功！)`;
         }
       };
     }
